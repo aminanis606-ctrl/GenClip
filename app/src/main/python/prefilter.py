@@ -219,32 +219,53 @@ def group_candidates(candidates):
     return groups
 
 
-def build_gemini_prompt(candidates, source_url=""):
+def build_gemini_prompt(groups, source_url=""):
+    # Mendukung input baik berupa hasil group_candidates (list of groups)
+    # maupun flat list candidates jika dipanggil secara legacy
+    if groups and isinstance(groups, (list, tuple)):
+        first = groups[0]
+        if isinstance(first, dict):
+            groups = group_candidates(groups)
+    elif not groups:
+        groups = []
+
     lines = [
         "URL YouTube:",
         source_url.strip() if source_url else "(URL tidak disertakan)",
         "",
-        "Daftar Timestamp Kandidat Klip:",
+        "=== KELOMPOK KANDIDAT PREFILTER (GROUPS) ===",
+        "Kandidat di bawah telah dikelompokkan berdasarkan tumpang tindih waktu/konteks (transitive overlap).",
+        "Kandidat dalam satu group harus dinilai bersamaan sebagai satu kelompok.",
+        "",
     ]
 
-    if not candidates:
-        lines.append("(Tidak ada kandidat klip ditemukan)")
+    if not groups:
+        lines.append("(Tidak ada kelompok kandidat ditemukan)")
     else:
-        for item in candidates:
-            c_start = item.get("context_start", item.get("anchor_start", 0.0))
-            c_end = item.get("context_end", item.get("anchor_end", 0.0))
-            time_formatted = f"{format_time(c_start)} - {format_time(c_end)}"
-            sec_formatted = f"{c_start:.3f} - {c_end:.3f}"
+        for g_idx, group in enumerate(groups, 1):
+            g_start = min(c["context_start"] for c in group)
+            g_end = max(c["context_end"] for c in group)
             lines.append(
-                f"- Kandidat #{item['id']}: {time_formatted} (Detik: {sec_formatted})"
+                f"--- GROUP {g_idx} ({len(group)} kandidat, Rentang Konteks: {format_time(g_start)} - {format_time(g_end)} / {g_start:.1f}s - {g_end:.1f}s) ---"
             )
+            for c in group:
+                lines.extend([
+                    f"CANDIDATE {c['id']}",
+                    f"ANCHOR: {c['anchor_start']:.3f} - {c['anchor_end']:.3f} ({format_time(c['anchor_start'])} - {format_time(c['anchor_end'])})",
+                    f"AVAILABLE_CONTEXT: {c['context_start']:.3f} - {c['context_end']:.3f} ({format_time(c['context_start'])} - {format_time(c['context_end'])})",
+                    "TRANSCRIPT:",
+                    c.get("text", "").strip(),
+                    "",
+                ])
 
     lines.extend([
-        "",
-        "Tugas Validator Gemini AI:",
-        "Validasi daftar timestamp kandidat di atas berdasarkan video pada URL tersebut.",
-        "Tentukan kandidat klip terbaik dengan hook terkuat untuk dipotong menjadi video pendek.",
-        "Berikan output timestamp awal dan akhir (START - END) yang presisi serta alasan singkatnya.",
+        "=== INSTRUKSI VALIDASI GEMINI AI ===",
+        "1. Evaluasi setiap GROUP kandidat di atas secara independen.",
+        "2. Kandidat dalam satu group saling beririsan konteks waktu. Tentukan apakah kandidat dalam group dapat dipilih atau digabungkan menjadi satu klip mandiri yang bernilai kuat (hook menarik, alur jelas, dan pesan tuntas).",
+        "3. Tentukan batas potong alami START dan END presisi di dalam batas AVAILABLE_CONTEXT dari group tersebut. Jangan memotong di tengah kalimat atau pemikiran pembicara.",
+        "4. Durasi klip yang valid idealnya 25 - 70 detik (diutamakan 30 - 60 detik).",
+        "5. Jangan memaksakan memilih jika sebuah group lemah atau tidak memiliki substansi mandiri.",
+        "6. Untuk setiap klip yang valid dari masing-masing group, sebutkan GROUP dan CANDIDATE ID asal, timestamp presisi START - END, judul/topik singkat, serta alasan pemilihannya.",
     ])
 
     return "\n".join(lines)

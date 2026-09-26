@@ -315,10 +315,13 @@ public class MainActivity extends Activity {
                 PyObject candidates =
                         module.callAttr("find_candidates", transcript);
 
+                PyObject groups =
+                        module.callAttr("group_candidates", candidates);
+
                 PyObject prompt =
                         module.callAttr(
                                 "build_gemini_prompt",
-                                candidates,
+                                groups,
                                 sourceUrl
                         );
 
