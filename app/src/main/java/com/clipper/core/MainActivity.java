@@ -153,92 +153,146 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void savePromptToDownload(String promptText) throws Exception {
+    private String savePromptToDownload(String promptText) {
         byte[] data = promptText.getBytes(StandardCharsets.UTF_8);
-        boolean saved = false;
+        String savedPath = null;
 
+        // Strategy 1: Direct File I/O to public Download/ClipperCore
         try {
-            File downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-            File clipperDir = new File(downloadDir, "ClipperCore");
+            File publicDownload = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+            File clipperDir = new File(publicDownload, "ClipperCore");
             if (!clipperDir.exists()) {
                 clipperDir.mkdirs();
             }
-            File targetFile = new File(clipperDir, "prompt.txt");
-            try (FileOutputStream fos = new FileOutputStream(targetFile)) {
+            File file = new File(clipperDir, "prompt.txt");
+            try (FileOutputStream fos = new FileOutputStream(file)) {
                 fos.write(data);
                 fos.flush();
             }
-            if (targetFile.exists() && targetFile.length() > 0) {
-                saved = true;
+            if (file.exists() && file.length() > 0) {
+                savedPath = "Download/ClipperCore/prompt.txt";
             }
-        } catch (Exception ignored) {
+        } catch (Throwable t) {
+            android.util.Log.w("ClipperCore", "Strategy 1 failed: " + t.getMessage());
         }
 
-        if (saved) {
-            return;
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            String relativePath = Environment.DIRECTORY_DOWNLOADS + "/ClipperCore/";
-
-            Uri[] collections = new Uri[]{
-                    MediaStore.Downloads.EXTERNAL_CONTENT_URI,
-                    MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),
-                    MediaStore.Files.getContentUri("external"),
-                    MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-            };
-
-            for (Uri collection : collections) {
-                try {
-                    try (Cursor cursor = getContentResolver().query(
-                            collection,
-                            new String[]{MediaStore.MediaColumns._ID},
-                            MediaStore.MediaColumns.DISPLAY_NAME + "=? AND ("
-                                    + MediaStore.MediaColumns.RELATIVE_PATH + "=? OR "
-                                    + MediaStore.MediaColumns.RELATIVE_PATH + "=?)",
-                            new String[]{"prompt.txt", relativePath, Environment.DIRECTORY_DOWNLOADS + "/ClipperCore"},
-                            null
-                    )) {
-                        if (cursor != null && cursor.moveToFirst()) {
-                            long id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID));
-                            Uri existingUri = ContentUris.withAppendedId(collection, id);
-                            try {
-                                getContentResolver().delete(existingUri, null, null);
-                            } catch (Exception ignored) {
-                            }
-                        }
-                    } catch (Exception ignored) {
-                    }
-
-                    ContentValues values = new ContentValues();
-                    values.put(MediaStore.MediaColumns.DISPLAY_NAME, "prompt.txt");
-                    values.put(MediaStore.MediaColumns.MIME_TYPE, "text/plain");
-                    values.put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath);
-                    values.put(MediaStore.MediaColumns.IS_PENDING, 1);
-
-                    Uri outputUri = getContentResolver().insert(collection, values);
-                    if (outputUri != null) {
-                        try (OutputStream out = getContentResolver().openOutputStream(outputUri)) {
-                            if (out != null) {
-                                out.write(data);
-                                out.flush();
-                            }
-                        }
-
-                        ContentValues ready = new ContentValues();
-                        ready.put(MediaStore.MediaColumns.IS_PENDING, 0);
-                        getContentResolver().update(outputUri, ready, null, null);
-                        saved = true;
-                        break;
-                    }
-                } catch (Exception ignored) {
+        // Strategy 2: Direct File I/O to public Download root
+        if (savedPath == null) {
+            try {
+                File publicDownload = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+                if (!publicDownload.exists()) {
+                    publicDownload.mkdirs();
                 }
+                File file = new File(publicDownload, "prompt.txt");
+                try (FileOutputStream fos = new FileOutputStream(file)) {
+                    fos.write(data);
+                    fos.flush();
+                }
+                if (file.exists() && file.length() > 0) {
+                    savedPath = "Download/prompt.txt";
+                }
+            } catch (Throwable t) {
+                android.util.Log.w("ClipperCore", "Strategy 2 failed: " + t.getMessage());
             }
         }
 
-        if (!saved) {
-            throw new IllegalStateException("Gagal membuat prompt.txt di Download.");
+        // Strategy 3: MediaStore Downloads (API 29+)
+        if (savedPath == null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try {
+                ContentValues values = new ContentValues();
+                values.put(MediaStore.MediaColumns.DISPLAY_NAME, "prompt.txt");
+                values.put(MediaStore.MediaColumns.MIME_TYPE, "text/plain");
+                values.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/ClipperCore");
+
+                Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+                if (uri != null) {
+                    try (OutputStream out = getContentResolver().openOutputStream(uri, "wt")) {
+                        if (out != null) {
+                            out.write(data);
+                            out.flush();
+                            savedPath = "Download/ClipperCore/prompt.txt";
+                        }
+                    }
+                }
+            } catch (Throwable t) {
+                android.util.Log.w("ClipperCore", "Strategy 3 failed: " + t.getMessage());
+            }
         }
+
+        // Strategy 4: MediaStore Downloads root (API 29+)
+        if (savedPath == null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try {
+                ContentValues values = new ContentValues();
+                values.put(MediaStore.MediaColumns.DISPLAY_NAME, "prompt.txt");
+                values.put(MediaStore.MediaColumns.MIME_TYPE, "text/plain");
+                values.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
+
+                Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+                if (uri != null) {
+                    try (OutputStream out = getContentResolver().openOutputStream(uri, "wt")) {
+                        if (out != null) {
+                            out.write(data);
+                            out.flush();
+                            savedPath = "Download/prompt.txt";
+                        }
+                    }
+                }
+            } catch (Throwable t) {
+                android.util.Log.w("ClipperCore", "Strategy 4 failed: " + t.getMessage());
+            }
+        }
+
+        // Strategy 5: App-specific external files Download directory
+        if (savedPath == null) {
+            try {
+                File extDir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+                if (extDir == null) {
+                    extDir = getExternalFilesDir(null);
+                }
+                if (extDir != null) {
+                    File clipperDir = new File(extDir, "ClipperCore");
+                    if (!clipperDir.exists()) {
+                        clipperDir.mkdirs();
+                    }
+                    File file = new File(clipperDir, "prompt.txt");
+                    try (FileOutputStream fos = new FileOutputStream(file)) {
+                        fos.write(data);
+                        fos.flush();
+                    }
+                    if (file.exists() && file.length() > 0) {
+                        savedPath = "Android/data/com.clipper.core/files/Download/ClipperCore/prompt.txt";
+                    }
+                }
+            } catch (Throwable t) {
+                android.util.Log.w("ClipperCore", "Strategy 5 failed: " + t.getMessage());
+            }
+        }
+
+        // Strategy 6: Internal files directory
+        if (savedPath == null) {
+            try {
+                File internalDir = new File(getFilesDir(), "ClipperCore");
+                if (!internalDir.exists()) {
+                    internalDir.mkdirs();
+                }
+                File file = new File(internalDir, "prompt.txt");
+                try (FileOutputStream fos = new FileOutputStream(file)) {
+                    fos.write(data);
+                    fos.flush();
+                }
+                if (file.exists() && file.length() > 0) {
+                    savedPath = file.getAbsolutePath();
+                }
+            } catch (Throwable t) {
+                android.util.Log.w("ClipperCore", "Strategy 6 failed: " + t.getMessage());
+            }
+        }
+
+        if (savedPath == null) {
+            throw new IllegalStateException("Gagal menyimpan prompt.txt ke memori.");
+        }
+
+        return savedPath;
     }
 
     private void runPrefilter(
@@ -268,18 +322,35 @@ public class MainActivity extends Activity {
                                 sourceUrl
                         );
 
-                savePromptToDownload(prompt.toJava(String.class));
+                String promptStr = prompt.toJava(String.class);
+                String finalPath = savePromptToDownload(promptStr);
+
+                // Otomatis salin teks prompt ke clipboard agar siap langsung dipaste ke Gemini AI
+                try {
+                    android.content.ClipboardManager clipboard =
+                            (android.content.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                    if (clipboard != null) {
+                        android.content.ClipData clip =
+                                android.content.ClipData.newPlainText("Gemini Prompt", promptStr);
+                        clipboard.setPrimaryClip(clip);
+                    }
+                } catch (Throwable ignored) {
+                }
 
                 runOnUiThread(() -> {
                     pbLoading.setVisibility(View.GONE);
                     btnAnalyze.setEnabled(true);
                     btnAnalyze.setText("Analisis Transcript");
-                    Toast.makeText(MainActivity.this, "Prompt selesai disimpan di Download/ClipperCore.", Toast.LENGTH_LONG).show();
+                    Toast.makeText(
+                            MainActivity.this,
+                            "Prompt berhasil disimpan & disalin ke clipboard!",
+                            Toast.LENGTH_LONG
+                    ).show();
                 });
 
                 sendNotification(
                         "Clipper Core: Prompt Selesai",
-                        "Prompt validator telah disimpan di folder Download/ClipperCore/prompt.txt",
+                        "Prompt validator telah disimpan di " + finalPath + " (dan otomatis disalin ke clipboard).",
                         false
                 );
             } catch (Exception e) {
@@ -410,6 +481,15 @@ public class MainActivity extends Activity {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                 requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 101);
+            }
+        }
+
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.Q) {
+            if (checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{
+                        Manifest.permission.WRITE_EXTERNAL_STORAGE,
+                        Manifest.permission.READ_EXTERNAL_STORAGE
+                }, 102);
             }
         }
 
