@@ -76,6 +76,94 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void savePromptToDownload(String promptText) throws Exception {
+        byte[] data = promptText.getBytes(StandardCharsets.UTF_8);
+        boolean saved = false;
+
+        try {
+            File downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+            File clipperDir = new File(downloadDir, "ClipperCore");
+            if (!clipperDir.exists()) {
+                clipperDir.mkdirs();
+            }
+            File targetFile = new File(clipperDir, "prompt.txt");
+            try (FileOutputStream fos = new FileOutputStream(targetFile)) {
+                fos.write(data);
+                fos.flush();
+            }
+            if (targetFile.exists() && targetFile.length() > 0) {
+                saved = true;
+            }
+        } catch (Exception ignored) {
+        }
+
+        if (saved) {
+            return;
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            String relativePath = Environment.DIRECTORY_DOWNLOADS + "/ClipperCore/";
+
+            Uri[] collections = new Uri[]{
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                    MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),
+                    MediaStore.Files.getContentUri("external"),
+                    MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            };
+
+            for (Uri collection : collections) {
+                try {
+                    try (Cursor cursor = getContentResolver().query(
+                            collection,
+                            new String[]{MediaStore.MediaColumns._ID},
+                            MediaStore.MediaColumns.DISPLAY_NAME + "=? AND ("
+                                    + MediaStore.MediaColumns.RELATIVE_PATH + "=? OR "
+                                    + MediaStore.MediaColumns.RELATIVE_PATH + "=?)",
+                            new String[]{"prompt.txt", relativePath, Environment.DIRECTORY_DOWNLOADS + "/ClipperCore"},
+                            null
+                    )) {
+                        if (cursor != null && cursor.moveToFirst()) {
+                            long id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID));
+                            Uri existingUri = ContentUris.withAppendedId(collection, id);
+                            try {
+                                getContentResolver().delete(existingUri, null, null);
+                            } catch (Exception ignored) {
+                            }
+                        }
+                    } catch (Exception ignored) {
+                    }
+
+                    ContentValues values = new ContentValues();
+                    values.put(MediaStore.MediaColumns.DISPLAY_NAME, "prompt.txt");
+                    values.put(MediaStore.MediaColumns.MIME_TYPE, "text/plain");
+                    values.put(MediaStore.MediaColumns.RELATIVE_PATH, relativePath);
+                    values.put(MediaStore.MediaColumns.IS_PENDING, 1);
+
+                    Uri outputUri = getContentResolver().insert(collection, values);
+                    if (outputUri != null) {
+                        try (OutputStream out = getContentResolver().openOutputStream(outputUri)) {
+                            if (out != null) {
+                                out.write(data);
+                                out.flush();
+                            }
+                        }
+
+                        ContentValues ready = new ContentValues();
+                        ready.put(MediaStore.MediaColumns.IS_PENDING, 0);
+                        getContentResolver().update(outputUri, ready, null, null);
+                        saved = true;
+                        break;
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+        }
+
+        if (!saved) {
+            throw new IllegalStateException("Gagal membuat prompt.txt di Download.");
+        }
+    }
+
     private void runPrefilter(
             String transcript,
             String sourceUrl,
@@ -106,105 +194,7 @@ public class MainActivity extends Activity {
                                 sourceUrl
                         );
 
-                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-                    throw new IllegalStateException(
-                            "Output Download memerlukan Android 10+."
-                    );
-                }
-
-                String relativePath =
-                        Environment.DIRECTORY_DOWNLOADS + "/ClipperCore/";
-
-                Uri downloadsUri = MediaStore.Downloads.EXTERNAL_CONTENT_URI;
-                Uri outputUri = null;
-
-                try (Cursor cursor = getContentResolver().query(
-                        downloadsUri,
-                        new String[]{MediaStore.MediaColumns._ID},
-                        MediaStore.MediaColumns.DISPLAY_NAME + "=? AND ("
-                                + MediaStore.MediaColumns.RELATIVE_PATH + "=? OR "
-                                + MediaStore.MediaColumns.RELATIVE_PATH + "=?)",
-                        new String[]{"prompt.txt", relativePath, Environment.DIRECTORY_DOWNLOADS + "/ClipperCore"},
-                        null
-                )) {
-                    if (cursor != null && cursor.moveToFirst()) {
-                        long id = cursor.getLong(cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID));
-                        Uri existingUri = ContentUris.withAppendedId(downloadsUri, id);
-                        try {
-                            getContentResolver().delete(existingUri, null, null);
-                        } catch (Exception ignored) {
-                        }
-                    }
-                } catch (Exception ignored) {
-                }
-
-                ContentValues values = new ContentValues();
-                values.put(
-                        MediaStore.MediaColumns.DISPLAY_NAME,
-                        "prompt.txt"
-                );
-                values.put(
-                        MediaStore.MediaColumns.MIME_TYPE,
-                        "text/plain"
-                );
-                values.put(
-                        MediaStore.MediaColumns.RELATIVE_PATH,
-                        relativePath
-                );
-                values.put(
-                        MediaStore.MediaColumns.IS_PENDING,
-                        1
-                );
-
-                try {
-                    outputUri = getContentResolver().insert(
-                            downloadsUri,
-                            values
-                    );
-                } catch (Exception ignored) {
-                }
-
-                if (outputUri == null) {
-                    try {
-                        downloadsUri = MediaStore.Downloads.getContentUri(
-                                MediaStore.VOLUME_EXTERNAL_PRIMARY
-                        );
-                        outputUri = getContentResolver().insert(
-                                downloadsUri,
-                                values
-                        );
-                    } catch (Exception ignored) {
-                    }
-                }
-
-                if (outputUri == null) {
-                    throw new IllegalStateException(
-                            "Gagal membuat prompt.txt di Download."
-                    );
-                }
-
-                try (OutputStream out =
-                             getContentResolver().openOutputStream(outputUri)) {
-                    if (out == null) {
-                        throw new IllegalStateException(
-                                "Gagal membuka prompt.txt."
-                        );
-                    }
-
-                    out.write(
-                            prompt.toJava(String.class)
-                                    .getBytes(StandardCharsets.UTF_8)
-                    );
-                }
-
-                ContentValues ready = new ContentValues();
-                ready.put(MediaStore.MediaColumns.IS_PENDING, 0);
-                getContentResolver().update(
-                        outputUri,
-                        ready,
-                        null,
-                        null
-                );
+                savePromptToDownload(prompt.toJava(String.class));
 
                 int count = candidates.asList().size();
 
