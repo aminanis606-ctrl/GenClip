@@ -21,16 +21,20 @@ android {
 
     signingConfigs {
         debugConfig {
-            storeFile file("${rootDir}/debug.keystore")
-            storePassword "android"
-            keyAlias "androiddebugkey"
-            keyPassword "android"
+            if (file("${rootDir}/debug.keystore").exists()) {
+                storeFile file("${rootDir}/debug.keystore")
+                storePassword "android"
+                keyAlias "androiddebugkey"
+                keyPassword "android"
+            }
         }
     }
 
     buildTypes {
         debug {
-            signingConfig signingConfigs.debugConfig
+            if (file("${rootDir}/debug.keystore").exists()) {
+                signingConfig signingConfigs.debugConfig
+            }
         }
     }
 }
@@ -38,7 +42,9 @@ android {
 chaquopy {
     defaultConfig {
         version = "3.11"
-        buildPython "/usr/bin/python3.11"
+        if (file("/usr/bin/python3.11").exists()) {
+            buildPython "/usr/bin/python3.11"
+        }
         pip {
             install "requests"
             install "youtube-transcript-api==1.2.4"
