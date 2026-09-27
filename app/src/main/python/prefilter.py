@@ -23,6 +23,72 @@ SIGNALS = re.compile(
     re.I,
 )
 
+# Sinyal konten short-form terarah untuk meningkatkan recall hook
+FINANCIAL_RE = re.compile(
+    r"\b("
+    r"rp\.?|rupiah|idr|usd|dollar|dolar|omzet|omset|profit|cuan|modal|utang|hutang|gaji|penjualan"
+    r")\b|"
+    r"\b\d+(?:[.,]\d+)?\s*(?:ribu|jt|juta|miliar|milyar|triliun|persen|%|k|m|b)\b|"
+    r"\brp\s*\d+",
+    re.I,
+)
+
+AMBITION_RE = re.compile(
+    r"\b("
+    r"target|ambisi|cita-cita|goal|tujuan|pengen|ingin|bertekad|fokus|"
+    r"mau capai|mencapai|tembus|wujudkan|meraih"
+    r")\b",
+    re.I,
+)
+
+PERSONAL_EXP_RE = re.compile(
+    r"\b("
+    r"pengalaman saya|waktu itu|pas saya|dulu saya|saat saya|ketika saya|"
+    r"sewaktu saya|cerita saya|kisah saya|perjalanan saya"
+    r")\b|"
+    r"\b(saya|aku|gue|gua)\s+(sempat|pernah|mengalami|merasakan|memutuskan|kehilangan|mencoba|sadar|belajar)\b",
+    re.I,
+)
+
+TRANSFORMATION_RE = re.compile(
+    r"\b("
+    r"titik balik|berubah total|mengubah hidup|titik terendah|bangkit|"
+    r"dari nol|dari bawah|sekarang jadi|akhirnya berubah|berbalik"
+    r")\b|"
+    r"\b(dulu|awalnya|mulanya)\b.*\b(sekarang|akhirnya)\b",
+    re.I,
+)
+
+PROBLEM_SOLUTION_RE = re.compile(
+    r"\b("
+    r"masalahnya|kendala|solusinya|kuncinya|rahasianya|jalan keluar|"
+    r"triknya|cara mengatasinya|hasilnya|dampaknya|akibatnya|kesalahan terbesar"
+    r")\b",
+    re.I,
+)
+
+EXTREME_EXP_RE = re.compile(
+    r"\b("
+    r"hancur|parah|gila|kacau|luar biasa|kaget|syok|shock|bangkrut|"
+    r"rugi besar|untung besar|gak nyangka|nggak nyangka|tidak disangka|ajaib|fatal"
+    r")\b",
+    re.I,
+)
+
+STRONG_OPINION_RE = re.compile(
+    r"\b("
+    r"menurut saya|saya yakin|faktanya|kenyataannya|sejujurnya|jujur saja|"
+    r"ingat ya|pelajaran terpenting|prinsip saya|kuncinya adalah|paling penting|"
+    r"jangan pernah|kesalahan fatal"
+    r")\b",
+    re.I,
+)
+
+QUESTION_HOOK_RE = re.compile(
+    r"\b(kenapa|mengapa|bagaimana|gimana|apa yang terjadi|tahu gak|tahu nggak)\b",
+    re.I,
+)
+
 BAD = re.compile(
     r"\b("
     r"subscribe|like|comment|follow|jangan lupa|"
@@ -95,19 +161,59 @@ def parse(transcript):
     return segments
 
 
-def score(segment):
+def score(segment, next_segment=None):
     text = segment["text"]
     words = len(text.split())
     value = 0
 
     if 8 <= words <= 60:
         value += 2
+    elif 5 <= words < 8:
+        value += 1
 
     if SIGNALS.search(text):
-        value += 4
+        value += 3
 
+    # 1. Nominal uang / angka finansial
+    if FINANCIAL_RE.search(text):
+        value += 3
+
+    # 2. Target atau ambisi
+    if AMBITION_RE.search(text):
+        value += 2
+
+    # 3. Pengalaman pribadi
+    if PERSONAL_EXP_RE.search(text):
+        value += 3
+
+    # 4. Perubahan hidup / before-after
+    if TRANSFORMATION_RE.search(text):
+        value += 3
+
+    # 5. Problem -> result / solusi
+    if PROBLEM_SOLUTION_RE.search(text):
+        value += 3
+
+    # 6. Pengalaman ekstrem atau mengejutkan
+    if EXTREME_EXP_RE.search(text):
+        value += 3
+
+    # 7. Pernyataan kuat / opini pribadi
+    if STRONG_OPINION_RE.search(text):
+        value += 2
+
+    # 8. Pertanyaan yang diikuti jawaban substantif
     if "?" in text:
         value += 2
+        if QUESTION_HOOK_RE.search(text):
+            value += 1
+        if re.search(r"\?.*\b(karena|sebab|jadi|ternyata|yaitu|adalah)\b", text, re.I):
+            value += 2
+        elif next_segment:
+            next_text = next_segment.get("text", "")
+            next_words = len(next_text.split())
+            if next_words >= 6 and not next_text.strip().endswith("?"):
+                value += 2
 
     if BAD.search(text):
         value -= 8
@@ -129,7 +235,8 @@ def find_candidates(transcript, limit=20):
     candidates = []
 
     for index, segment in enumerate(segments):
-        value = score(segment)
+        next_segment = segments[index + 1] if index + 1 < len(segments) else None
+        value = score(segment, next_segment)
 
         if value <= 0:
             continue
