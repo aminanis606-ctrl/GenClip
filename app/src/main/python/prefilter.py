@@ -370,7 +370,7 @@ def build_gemini_prompt(groups, source_url=""):
                         if key not in unique_segments:
                             unique_segments[key] = (0.0, 0.0, line_clean)
 
-            # Satu transcript deduplicated per GROUP
+            # Satu timeline TRANSCRIPT deduplicated per GROUP, diurutkan berdasarkan start
             sorted_segments = sorted(unique_segments.values(), key=lambda x: (x[0], x[1]))
             deduped_text = "\n".join(seg[2] for seg in sorted_segments)
             deduped_group_chars = len(deduped_text)
@@ -378,14 +378,14 @@ def build_gemini_prompt(groups, source_url=""):
             total_raw_transcript_chars += raw_group_chars
             total_deduped_transcript_chars += deduped_group_chars
 
-            # Diagnostic karakter transcript per group
+            # Diagnostic karakter transcript per GROUP
             print(
-                f"[PREFILTER_DIAG] GROUP {g_idx}: transcript chars before={raw_group_chars}, "
-                f"after={deduped_group_chars}, saved={raw_group_chars - deduped_group_chars}"
+                f"[DIAGNOSTIC] GROUP {g_idx}: "
+                f"chars transcript sebelum dedup={raw_group_chars}, "
+                f"chars sesudah dedup={deduped_group_chars}"
             )
 
             lines.extend([
-                "",
                 "TRANSCRIPT:",
                 deduped_text,
                 "",
@@ -393,11 +393,11 @@ def build_gemini_prompt(groups, source_url=""):
 
     final_prompt = "\n".join(lines)
 
-    # Diagnostic total prompt akhir
+    # Diagnostic total prompt chars
     print(
-        f"[PREFILTER_DIAG] TOTAL PROMPT: {len(final_prompt)} chars | "
-        f"transcript before={total_raw_transcript_chars}, after={total_deduped_transcript_chars}, "
-        f"saved={total_raw_transcript_chars - total_deduped_transcript_chars} chars"
+        f"[DIAGNOSTIC] total prompt chars={len(final_prompt)} "
+        f"(total transcript sebelum dedup={total_raw_transcript_chars}, "
+        f"sesudah dedup={total_deduped_transcript_chars})"
     )
 
     return final_prompt
