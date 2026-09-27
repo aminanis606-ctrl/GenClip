@@ -231,36 +231,8 @@ def build_gemini_prompt(groups, source_url=""):
 
     target_url = source_url.strip() if source_url else "<URL_YOUTUBE>"
 
+    # Pindahkan seluruh instruksi Gemini ke PALING ATAS prompt
     lines = [
-        "URL YouTube:",
-        target_url,
-        "",
-        "=== KELOMPOK KANDIDAT PREFILTER (GROUPS) ===",
-        "Kandidat di bawah telah dikelompokkan berdasarkan tumpang tindih waktu/konteks (transitive overlap).",
-        "Kandidat dalam satu group harus dinilai bersamaan.",
-        "",
-    ]
-
-    if not groups:
-        lines.append("(Tidak ada kelompok kandidat ditemukan)")
-    else:
-        for g_idx, group in enumerate(groups, 1):
-            g_start = min(c["context_start"] for c in group)
-            g_end = max(c["context_end"] for c in group)
-            lines.append(
-                f"--- GROUP {g_idx} ({len(group)} kandidat, Rentang Konteks: {format_time(g_start)} - {format_time(g_end)} / {g_start:.1f}s - {g_end:.1f}s) ---"
-            )
-            for c in group:
-                lines.extend([
-                    f"CANDIDATE {c['id']}",
-                    f"ANCHOR: {c['anchor_start']:.3f} - {c['anchor_end']:.3f} ({format_time(c['anchor_start'])} - {format_time(c['anchor_end'])})",
-                    f"AVAILABLE_CONTEXT: {c['context_start']:.3f} - {c['context_end']:.3f} ({format_time(c['context_start'])} - {format_time(c['context_end'])})",
-                    "TRANSCRIPT:",
-                    c.get("text", "").strip(),
-                    "",
-                ])
-
-    lines.extend([
         "=== ATURAN EVALUASI & VALIDASI ===",
         "1. Evaluasi SETIAP GROUP secara independen dan BERURUTAN mulai dari GROUP 1 sampai GROUP terakhir. Tidak boleh melewati group mana pun.",
         "2. Sebelum membuat daftar clip final, Anda WAJIB menulis satu baris evaluasi untuk SETIAP GROUP dengan format persis:",
@@ -349,6 +321,83 @@ def build_gemini_prompt(groups, source_url=""):
         "SATU COMMAND YT-DLP",
         "(Hanya jika ada clip terpilih. JANGAN tampilkan bagian ini jika TIDAK ADA KLIP LAYAK)",
         f'yt-dlp --download-sections "*START1-END1" --download-sections "*START2-END2" -f "bv*[vcodec^=avc1]+ba[acodec^=mp4a]/b[ext=mp4]" --merge-output-format mp4 -o "/storage/emulated/0/Movies/GenClip/[JudulClipSanitasi]_%(section_start)s-%(section_end)s.%(ext)s" "{target_url}"',
-    ])
+        "",
+        "=== DATA SUMBER ===",
+        "URL YouTube:",
+        target_url,
+        "",
+        "=== KELOMPOK KANDIDAT PREFILTER (GROUPS) ===",
+        "Kandidat di bawah telah dikelompokkan berdasarkan tumpang tindih waktu/konteks (transitive overlap).",
+        "Kandidat dalam satu group harus dinilai bersamaan.",
+        "",
+    ]
 
-    return "\n".join(lines)
+    total_raw_transcript_chars = 0
+    total_deduped_transcript_chars = 0
+
+    if not groups:
+        lines.append("(Tidak ada kelompok kandidat ditemukan)")
+    else:
+        for g_idx, group in enumerate(groups, 1):
+            g_start = min(c["context_start"] for c in group)
+            g_end = max(c["context_end"] for c in group)
+            lines.append(
+                f"--- GROUP {g_idx} ({len(group)} kandidat, Rentang Konteks: {format_time(g_start)} - {format_time(g_end)} / {g_start:.1f}s - {g_end:.1f}s) ---"
+            )
+
+            # Metadata candidate dibuat ringkas, satu baris
+            raw_group_chars = 0
+            unique_segments = {}
+
+            for c in group:
+                lines.append(
+                    f"CANDIDATE {c['id']}: ANCHOR {c['anchor_start']:.3f}-{c['anchor_end']:.3f} | AVAILABLE_CONTEXT {c['context_start']:.3f}-{c['context_end']:.3f}"
+                )
+                c_text = c.get("text", "").strip()
+                raw_group_chars += len(c_text)
+
+                for line in c_text.splitlines():
+                    line_clean = line.strip()
+                    if not line_clean:
+                        continue
+                    m = SEGMENT_RE.match(line_clean)
+                    if m:
+                        key = (float(m.group(1)), float(m.group(2)), m.group(3).strip())
+                        if key not in unique_segments:
+                            unique_segments[key] = (key[0], key[1], line_clean)
+                    else:
+                        key = (0.0, 0.0, line_clean)
+                        if key not in unique_segments:
+                            unique_segments[key] = (0.0, 0.0, line_clean)
+
+            # Satu transcript deduplicated per GROUP
+            sorted_segments = sorted(unique_segments.values(), key=lambda x: (x[0], x[1]))
+            deduped_text = "\n".join(seg[2] for seg in sorted_segments)
+            deduped_group_chars = len(deduped_text)
+
+            total_raw_transcript_chars += raw_group_chars
+            total_deduped_transcript_chars += deduped_group_chars
+
+            # Diagnostic karakter transcript per group
+            print(
+                f"[PREFILTER_DIAG] GROUP {g_idx}: transcript chars before={raw_group_chars}, "
+                f"after={deduped_group_chars}, saved={raw_group_chars - deduped_group_chars}"
+            )
+
+            lines.extend([
+                "",
+                "TRANSCRIPT:",
+                deduped_text,
+                "",
+            ])
+
+    final_prompt = "\n".join(lines)
+
+    # Diagnostic total prompt akhir
+    print(
+        f"[PREFILTER_DIAG] TOTAL PROMPT: {len(final_prompt)} chars | "
+        f"transcript before={total_raw_transcript_chars}, after={total_deduped_transcript_chars}, "
+        f"saved={total_raw_transcript_chars - total_deduped_transcript_chars} chars"
+    )
+
+    return final_prompt
