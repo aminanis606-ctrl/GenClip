@@ -125,7 +125,3 @@ def transcript_srt(url):
         raise RuntimeError("Transcript kosong.")
 
     return "\n".join(lines)
-
-
-def status():
-    return "Clipper Python core ready"
